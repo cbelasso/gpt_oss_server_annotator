@@ -1,0 +1,42 @@
+[project]
+name = "vllm-annotator"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "click>=8.2.1",
+    "colorama>=0.4.6",
+    "gliner>=0.2.21",
+    "gpustat>=1.1.1",
+    "instructor>=1.11.3",
+    "ipdb>=0.13.13",
+    "ipython>=9.4.0",
+    "langchain-community>=0.3.27",
+    "langchain[openai]>=0.3.27",
+    "langgraph>=0.5.4",
+    "nest-asyncio>=1.6.0",
+    "openai>=1.97.1",
+    "openpyxl>=3.1.5",
+    "pandas>=2.3.1",
+    "pip>=25.2",
+    "poutyne>=1.17.4",
+    "pydantic>=2.11.7",
+    "pyodbc>=5.2.0",
+    "rich>=14.1.0",
+    "sentence-transformers>=5.1.0",
+    "sqlalchemy>=2.0.42",
+    "tabulate>=0.9.0",
+    "torch>=2.8.0",
+    "llm-parallelization", # ✓ CORRECT - use the package name with hyphen
+    "uvicorn>=0.38.0",
+]
+
+[tool.uv.sources]
+llm-parallelization = { workspace = true }  # ✓ Tell uv it's a workspace package
+
+[tool.uv.workspace]
+members = [
+    "lib/*",
+]
+

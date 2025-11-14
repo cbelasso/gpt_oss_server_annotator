@@ -1,0 +1,19 @@
+# Classification Server Requirements
+
+# Web framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# Async HTTP client
+aiohttp>=3.9.0
+
+# Existing dependencies (should already be installed)
+# click>=8.1.0
+# rich>=13.0.0
+# pandas>=2.0.0
+# pydantic>=2.0.0
+
+# For testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+httpx>=0.25.0  # For testing FastAPI
