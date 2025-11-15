@@ -1,16 +1,25 @@
 """
-Classification Server with Intelligent Request Batching
+Classification Server with Dynamic Config Support
 
-FastAPI server that keeps LLMs loaded and optimally batches requests
-across different capability combinations for maximum GPU utilization.
+FastAPI server that keeps LLMs loaded and supports different configs per request.
+
+Key Features:
+- Optional default config at startup
+- Per-request config override via config_path
+- Config caching for performance
+- Intelligent request batching across different capability combinations
 
 Usage:
-    python classifier_server.py --config topics.json --gpu-list 0,1,2,3
+    # With default config
+    python classifier_server.py --default-config topics.json --backend vllm-server --vllm-server-url "..." --port 9000
     
-    # Then make requests:
-    curl -X POST http://localhost:8000/classify \
+    # Without default config (for standalone capabilities only)
+    python classifier_server.py --backend vllm-server --vllm-server-url "..." --port 9000
+    
+    # Then make requests with optional config override:
+    curl -X POST http://localhost:9000/classify \
          -H "Content-Type: application/json" \
-         -d '{"texts": ["example text"], "capabilities": ["classification", "recommendations"]}'
+         -d '{"texts": ["example"], "capabilities": ["classification"], "config_path": "/path/to/custom.json"}'
 """
 
 from contextlib import asynccontextmanager
@@ -48,21 +57,21 @@ SHUTDOWN_KEY = os.getenv("CLASSIFIER_SHUTDOWN_KEY", "toooo myyyy!!!!")
 
 def initialize_state_from_env():
     """Initialize server state when running via `uvicorn classifier_server:app`."""
-    config_path = os.getenv("CLASSIFIER_CONFIG")
+    default_config = os.getenv("CLASSIFIER_DEFAULT_CONFIG")
     gpu_list = os.getenv("CLASSIFIER_GPU_LIST", "0,1,2,3")
-    if not config_path:
-        console.print("[yellow]⚠️ CLASSIFIER_CONFIG not set - skipping model init[/yellow]")
-        return
 
     gpu_ids = [int(x.strip()) for x in gpu_list.split(",")]
 
     console.print("[cyan]Initializing server from environment...[/cyan]")
-    console.print(f"  • Config: {config_path}")
+    if default_config:
+        console.print(f"  • Default Config: {default_config}")
+    else:
+        console.print("  • Default Config: None (config required per request)")
     console.print(f"  • GPUs: {gpu_ids}")
 
     policy = DefaultPolicy()
     state.processor_pool = ProcessorPool(
-        config_path=Path(config_path),
+        default_config_path=Path(default_config) if default_config else None,
         gpu_list=gpu_ids,
         policy=policy,
         gpu_memory_utilization=0.95,
@@ -79,7 +88,10 @@ def initialize_state_from_env():
         batch_timeout=0.1,
     )
 
-    console.print("[green]✓ Processor ready (CLI mode)[/green]")
+    # Store default config path
+    state.default_config_path = Path(default_config) if default_config else None
+
+    console.print("[green]✓ Processor ready[/green]")
 
 
 # ============================================================================
@@ -95,6 +107,9 @@ class ClassificationRequest(BaseModel):
         default=["classification"],
         description="Capabilities to execute (classification, recommendations, alerts, etc.)",
     )
+    config_path: Optional[str] = Field(
+        default=None, description="Path to config JSON file (overrides server default)"
+    )
     project_name: Optional[str] = Field(
         default=None, description="Optional project name for root prefix"
     )
@@ -106,6 +121,7 @@ class ClassificationResponse(BaseModel):
     results: List[Dict[str, Any]] = Field(..., description="Classification results per text")
     processing_time: float = Field(..., description="Processing time in seconds")
     batch_info: Dict[str, Any] = Field(..., description="Information about batch processing")
+    config_used: Optional[str] = Field(..., description="Config file that was used")
 
 
 class HealthResponse(BaseModel):
@@ -117,6 +133,7 @@ class HealthResponse(BaseModel):
     capabilities_available: List[str]
     requests_processed: int
     uptime_seconds: float
+    default_config: Optional[str]
 
 
 class ServerStats(BaseModel):
@@ -127,6 +144,7 @@ class ServerStats(BaseModel):
     average_processing_time: float
     requests_by_capability: Dict[str, int]
     uptime_seconds: float
+    configs_cached: int
 
 
 # ============================================================================
@@ -141,6 +159,7 @@ class ServerState:
         self.processor_pool: Optional[ProcessorPool] = None
         self.request_batcher: Optional[RequestBatcher] = None
         self.registry: Optional[CapabilityRegistry] = None
+        self.default_config_path: Optional[Path] = None
         self.start_time: float = time.time()
         self.stats = {
             "total_requests": 0,
@@ -181,14 +200,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Hierarchical Text Classification Server",
-    description="High-performance text classification with intelligent request batching",
-    version="1.0.0",
+    description="High-performance text classification with dynamic config support",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
-# Auto-initialize if running under Uvicorn CLI
-if not state.processor_pool:
-    initialize_state_from_env()
+# Note: Auto-initialization removed to prevent conflicts with CLI args
+# If running via uvicorn directly, set environment variables:
+#   export CLASSIFIER_DEFAULT_CONFIG=/path/to/config.json
+#   export CLASSIFIER_GPU_LIST="0,1,2,3"
+#   export CLASSIFIER_BACKEND="vllm-server"
+#   export CLASSIFIER_SERVER_URLS="http://localhost:8054/v1,..."
+# Then: uvicorn classifier_server:app --host 0.0.0.0 --port 9000
 
 
 # ============================================================================
@@ -201,7 +224,8 @@ async def root():
     """Root endpoint with API information."""
     return {
         "service": "Hierarchical Text Classification Server",
-        "version": "1.0.0",
+        "version": "2.0.0",
+        "features": ["dynamic_config_support", "request_batching", "multi_capability"],
         "endpoints": {
             "classify": "POST /classify - Classify texts",
             "health": "GET /health - Health check",
@@ -224,6 +248,7 @@ async def health_check():
         capabilities_available=state.registry.list_capabilities(),
         requests_processed=state.stats["total_requests"],
         uptime_seconds=time.time() - state.start_time,
+        default_config=str(state.default_config_path) if state.default_config_path else None,
     )
 
 
@@ -245,6 +270,7 @@ async def get_stats():
         average_processing_time=avg_time,
         requests_by_capability=state.stats["requests_by_capability"],
         uptime_seconds=time.time() - state.start_time,
+        configs_cached=state.processor_pool.get_config_cache_size(),
     )
 
 
@@ -288,13 +314,33 @@ async def classify_texts(request: ClassificationRequest):
     """
     Classify texts using specified capabilities.
 
-    This endpoint intelligently batches requests to maximize GPU utilization
-    and minimize redundant processing.
+    Supports dynamic config per request - either use the config_path provided
+    in the request, or fall back to the server's default config.
     """
     if not state.request_batcher or not state.registry:
         raise HTTPException(status_code=503, detail="Server not initialized")
 
     start_time = time.time()
+
+    # Determine which config to use
+    config_path = None
+    if request.config_path:
+        config_path = Path(request.config_path)
+        if not config_path.exists():
+            raise HTTPException(
+                status_code=400, detail=f"Config file not found: {request.config_path}"
+            )
+    elif state.default_config_path:
+        config_path = state.default_config_path
+    else:
+        # Check if any capability requires hierarchy
+        requires_hierarchy = state.registry.get_hierarchy_requirements(request.capabilities)
+        if requires_hierarchy:
+            raise HTTPException(
+                status_code=400,
+                detail="Config required for classification capabilities. "
+                "Provide config_path in request or start server with --default-config",
+            )
 
     # Validate capabilities
     errors = state.registry.validate_capabilities(request.capabilities)
@@ -310,10 +356,11 @@ async def classify_texts(request: ClassificationRequest):
         )
 
     try:
-        # Process through batcher
+        # Process through batcher with config
         results = await state.request_batcher.process_request(
             texts=request.texts,
             capabilities=request.capabilities,
+            config_path=config_path,
             project_name=request.project_name,
         )
 
@@ -331,6 +378,7 @@ async def classify_texts(request: ClassificationRequest):
                 "text_count": len(request.texts),
                 "capabilities_executed": request.capabilities,
             },
+            config_used=str(config_path) if config_path else None,
         )
 
     except Exception as e:
@@ -356,6 +404,8 @@ async def shutdown(request: Request):
     except Exception as e:
         console.print(f"[red]SIGINT failed: {e}[/red]")
         # Fallback for embedded or programmatic mode
+        import asyncio
+
         loop = asyncio.get_event_loop()
         loop.call_later(0.1, loop.stop)
         console.print("[cyan]Stopped event loop directly (programmatic mode)[/cyan]")
@@ -370,10 +420,10 @@ async def shutdown(request: Request):
 
 @click.command()
 @click.option(
-    "--config",
+    "--default-config",
     type=click.Path(exists=True, path_type=Path),
-    required=True,
-    help="Path to topic hierarchy JSON file",
+    default=None,
+    help="Default topic hierarchy JSON file (optional)",
 )
 @click.option(
     "--host",
@@ -453,7 +503,7 @@ async def shutdown(request: Request):
     help="Max concurrent requests to VLLM server (only used with --backend=vllm-server)",
 )
 def serve(
-    config: Path,
+    default_config: Optional[Path],
     host: str,
     port: int,
     gpu_list: str,
@@ -464,22 +514,28 @@ def serve(
     min_confidence: int,
     require_excerpt: bool,
     max_stem_definitions: int,
-    backend: str,  # NEW
-    vllm_server_url: str,  # NEW
-    max_concurrent: int,  # NEW
+    backend: str,
+    vllm_server_url: str,
+    max_concurrent: int,
 ):
     """
-    Start the classification server.
+    Start the classification server with dynamic config support.
 
-    The server keeps LLMs loaded in memory and intelligently batches
-    requests for optimal GPU utilization.
+    The server can now accept different configs per request while maintaining
+    optimal performance through config caching.
     """
-    console.print("[cyan]Initializing Classification Server...[/cyan]")
+    console.print("[cyan]Initializing Classification Server (v2.0)[/cyan]")
 
     # Parse GPU list
     gpu_ids = [int(x.strip()) for x in gpu_list.split(",")]
     console.print(f"  • GPUs: {gpu_ids}")
-    console.print(f"  • Config: {config}")
+    if default_config:
+        console.print(f"  • Default Config: {default_config}")
+    else:
+        console.print(
+            "  • Default Config: None (config required per request for classification)"
+        )
+    console.print(f"  • Backend: {backend}")
     console.print(f"  • Batch size: {batch_size}")
     console.print(f"  • Batch timeout: {batch_timeout}s")
 
@@ -493,17 +549,17 @@ def serve(
         policies.append(ExcerptRequiredPolicy())
     policy = CompositePolicy(*policies) if policies else DefaultPolicy()
 
-    # Initialize processor pool
+    # Initialize processor pool with dynamic config support
     console.print("\n[cyan]Loading models...[/cyan]")
     state.processor_pool = ProcessorPool(
-        config_path=config,
+        default_config_path=default_config,
         gpu_list=gpu_ids,
         policy=policy,
         gpu_memory_utilization=gpu_memory,
         max_model_len=max_length,
         batch_size=batch_size,
         backend=backend,
-        server_urls=server_urls,  # ✅ Fixed (was server_uls)
+        server_urls=server_urls,
         max_concurrent=max_concurrent,
     )
 
@@ -525,6 +581,9 @@ def serve(
         registry=state.registry,
         batch_timeout=batch_timeout,
     )
+
+    # Store default config
+    state.default_config_path = default_config
 
     console.print("\n[green]✓ Server ready![/green]")
     console.print(f"[cyan]Listening on {host}:{port}[/cyan]\n")
