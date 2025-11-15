@@ -1359,11 +1359,15 @@ name = "llm-parallelization"
 version = "0.1.0"
 source = { editable = "lib/llm_parallelization" }
 dependencies = [
+    { name = "openai" },
     { name = "vllm" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "vllm", specifier = "==0.10.2" }]
+requires-dist = [
+    { name = "openai", specifier = ">=1.109.1" },
+    { name = "vllm", specifier = "==0.10.2" },
+]
 
 [[package]]
 name = "llvmlite"

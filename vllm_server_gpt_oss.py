@@ -8,14 +8,12 @@ import time
 from typing import List
 
 import aiohttp
-import requests
-from openai import AsyncOpenAI, OpenAI
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+import requests
 
 # Logging setup
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Constants
@@ -25,9 +23,9 @@ MODEL_NAME = "openai/gpt-oss-120b"
 VLLM_HOST = "0.0.0.0"
 VLLM_PORT = 8054
 VLLM_URL = f"http://{VLLM_HOST}:{VLLM_PORT}/v1"
-GPU_MEMORY_UTILIZATION = 0.9
+GPU_MEMORY_UTILIZATION = 0.90
 TENSOR_PARALLEL_SIZE = 4
-MAX_MODEL_LEN = 65536
+MAX_MODEL_LEN = 10240
 MAX_TOKENS = 50000
 DTYPE = "bfloat16"
 PID_FILE = "vllm_server.pid"
@@ -110,9 +108,7 @@ def start_server(model_name: str = None):
         logger.info(f"Server started with PID {process.pid}. PID saved to {PID_FILE}")
         return process
     except FileNotFoundError:
-        logger.error(
-            "Could not find 'python' or vLLM modules. Ensure vLLM is installed."
-        )
+        logger.error("Could not find 'python' or vLLM modules. Ensure vLLM is installed.")
         return None
     except Exception as e:
         logger.error(f"Failed to start vLLM server: {e}")
@@ -256,17 +252,13 @@ async def run_single_inference(
                 "result": result_text.model_dump(),
             }
         else:
-            logger.warning(
-                f"Prompt {prompt_index}: Could not reliably access 'output_parsed'"
-            )
+            logger.warning(f"Prompt {prompt_index}: Could not reliably access 'output_parsed'")
             return {
                 "prompt_index": prompt_index,
                 "success": False,
                 "error": "Could not parse output",
                 "raw_response": (
-                    response.model_dump()
-                    if hasattr(response, "model_dump")
-                    else str(response)
+                    response.model_dump() if hasattr(response, "model_dump") else str(response)
                 ),
             }
 
@@ -321,9 +313,7 @@ async def run_inference(
 
     async def bounded_inference(prompt, idx):
         async with semaphore:
-            return await run_single_inference(
-                prompt, schema_class, model, async_client, idx
-            )
+            return await run_single_inference(prompt, schema_class, model, async_client, idx)
 
     # Run all inferences concurrently (with limit)
     logger.info(f"Starting inference for {len(prompts)} prompts...")
@@ -392,9 +382,7 @@ async def run_async_inference(
     try:
         with open(prompt_file, "r") as file:
             prompt = file.read()
-        logger.info(
-            f"Read prompt from file: '{prompt_file}' for async guided inference."
-        )
+        logger.info(f"Read prompt from file: '{prompt_file}' for async guided inference.")
     except FileNotFoundError:
         logger.error(f"Error: Prompt file '{prompt_file}' not found.")
         return
@@ -424,18 +412,14 @@ async def run_async_inference(
                 parsed = schema_class.model_validate_json(response_text)
 
                 result_data = parsed.model_dump()
-                logger.info(
-                    f"Pydantic validation successful using {schema_class.__name__}."
-                )
+                logger.info(f"Pydantic validation successful using {schema_class.__name__}.")
                 logger.debug(f"Parsed data: {result_data}")
 
                 if output_file:
                     try:
                         with open(output_file, "w") as f:
                             json.dump(result_data, f, indent=4)
-                            print(
-                                f"Inference result successfully written to: {output_file}"
-                            )
+                            print(f"Inference result successfully written to: {output_file}")
                         logger.info(
                             f"Async inference result successfully written to: {output_file}"
                         )
@@ -447,9 +431,7 @@ async def run_async_inference(
                     print(json.dumps(result_data, indent=4))
 
             except Exception as e:
-                logger.error(
-                    f"JSON Parsing/Validation Error for {schema_class.__name__}: {e}"
-                )
+                logger.error(f"JSON Parsing/Validation Error for {schema_class.__name__}: {e}")
                 logger.error(f"Raw text received: {response_text}")
 
     except Exception as e:
@@ -458,9 +440,7 @@ async def run_async_inference(
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print(
-            "Usage: python run_gpt_oss_120b_server.py <start|stop|status|run|run_async>"
-        )
+        print("Usage: python run_gpt_oss_120b_server.py <start|stop|status|run|run_async>")
         print(
             "       python run_gpt_oss_120b_server.py run <prompt_file.txt> [output_file.json] [model_name]"
         )
@@ -534,7 +514,6 @@ if __name__ == "__main__":
         sys.exit(0)
 
     elif command == "run_async":
-
         # Allow: python vllm_server_gpt_oss.py run_async <prompt_file.txt> [output_file.json]
         if len(sys.argv) < 3:
             print(
@@ -561,7 +540,5 @@ if __name__ == "__main__":
     else:
         print(f"Unknown command: {command}")
         print("Usage: python run_gpt_oss_120b_server.py <start|stop|status|run>")
-        print(
-            "python run_gpt_oss_120b_server.py run <prompt_file.txt> [output_file.json]"
-        )
+        print("python run_gpt_oss_120b_server.py run <prompt_file.txt> [output_file.json]")
         sys.exit(1)

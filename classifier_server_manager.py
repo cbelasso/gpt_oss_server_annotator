@@ -22,12 +22,6 @@ console = Console()
 
 
 class ProcessorPool:
-    """
-    Manages a persistent ClassificationProcessor instance.
-
-    Keeps LLMs loaded in memory and provides thread-safe access.
-    """
-
     def __init__(
         self,
         config_path,
@@ -36,15 +30,19 @@ class ProcessorPool:
         gpu_memory_utilization: float = 0.95,
         max_model_len: int = 10240,
         batch_size: int = 25,
+        backend: str = "local",  # NEW
+        vllm_server_url: str = "http://0.0.0.0:8054/v1",  # NEW
+        max_concurrent: int = 5,  # NEW
     ):
         from classifier import ClassificationProcessor
 
         self.config_path = config_path
         self.gpu_list = gpu_list
         self.batch_size = batch_size
+        self.backend = backend
 
         # Initialize processor
-        console.print("[cyan]Initializing processor...[/cyan]")
+        console.print(f"[cyan]Initializing processor ({backend} backend)...[/cyan]")
         self.processor = ClassificationProcessor(
             config_path=config_path,
             gpu_list=gpu_list,
@@ -52,6 +50,9 @@ class ProcessorPool:
             gpu_memory_utilization=gpu_memory_utilization,
             max_model_len=max_model_len,
             batch_size=batch_size,
+            backend=backend,  # NEW
+            vllm_server_url=vllm_server_url,  # NEW
+            max_concurrent=max_concurrent,  # NEW
         )
         console.print("[green]✓ Processor ready[/green]")
 

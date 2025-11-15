@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Type
 from llm_parallelization.parallelization import (
     FlexibleSchemaProcessor,
 )
+from llm_parallelization.vllm_server_processor import VLLMServerProcessor
 from pydantic import BaseModel
 
 from .classifier import HierarchicalClassifier
@@ -22,13 +23,6 @@ from .prompts import standard_classification_prompt
 
 
 class ClassificationProcessor:
-    """
-    High-level processor for hierarchical text classification.
-
-    This class provides a convenient interface for running classification tasks,
-    handling processor lifecycle, and exporting results.
-    """
-
     def __init__(
         self,
         config_path: str | Path,
@@ -41,26 +35,44 @@ class ClassificationProcessor:
         max_model_len: int = 10240,
         multiplicity: int = 1,
         batch_size=25,
+        # NEW PARAMETERS
+        backend: str = "local",  # "local" or "vllm-server"
+        vllm_server_url: str = "http://0.0.0.0:8054/v1",
+        max_concurrent: int = 5,
     ):
         self.batch_size = batch_size
         self.config_path = config_path
         self.separator = separator
+        self.backend = backend
 
         # Load hierarchy
         self.topic_hierarchy = load_topic_hierarchy(config_path)
         if not self.topic_hierarchy:
             raise ValueError(f"Failed to load hierarchy from {config_path}")
 
-        # Initialize LLM processor
-        self.llm_processor = FlexibleSchemaProcessor(
-            gpu_list=gpu_list or [0],
-            llm=llm,
-            gpu_memory_utilization=gpu_memory_utilization,
-            max_model_len=max_model_len,
-            multiplicity=multiplicity,
-        )
+        # Initialize LLM processor based on backend
+        if backend == "local":
+            self.llm_processor = FlexibleSchemaProcessor(
+                gpu_list=gpu_list or [0],
+                llm=llm,
+                gpu_memory_utilization=gpu_memory_utilization,
+                max_model_len=max_model_len,
+                multiplicity=multiplicity,
+            )
+        elif backend == "vllm-server":
+            self.llm_processor = VLLMServerProcessor(
+                server_url=vllm_server_url,
+                model_name=llm,
+                max_concurrent=max_concurrent,
+                # Pass through args for compatibility (ignored by VLLMServerProcessor)
+                gpu_list=gpu_list,
+                gpu_memory_utilization=gpu_memory_utilization,
+                max_model_len=max_model_len,
+            )
+        else:
+            raise ValueError(f"Unknown backend: {backend}")
 
-        # Initialize classifier
+        # Initialize classifier (same regardless of backend!)
         self.classifier = HierarchicalClassifier(
             processor=self.llm_processor,
             prompt_fn=prompt_fn or standard_classification_prompt,

@@ -408,6 +408,24 @@ async def shutdown(request: Request):
     default=None,
     help="Max definitions for stem analysis",
 )
+@click.option(
+    "--backend",
+    type=click.Choice(["local", "vllm-server"]),
+    default="local",
+    help="LLM backend: 'local' (load models) or 'vllm-server' (connect to server)",
+)
+@click.option(
+    "--vllm-server-url",
+    type=str,
+    default="http://0.0.0.0:8054/v1",
+    help="URL for VLLM server (only used with --backend=vllm-server)",
+)
+@click.option(
+    "--max-concurrent",
+    type=int,
+    default=5,
+    help="Max concurrent requests to VLLM server (only used with --backend=vllm-server)",
+)
 def serve(
     config: Path,
     host: str,
@@ -420,6 +438,9 @@ def serve(
     min_confidence: int,
     require_excerpt: bool,
     max_stem_definitions: int,
+    backend: str,  # NEW
+    vllm_server_url: str,  # NEW
+    max_concurrent: int,  # NEW
 ):
     """
     Start the classification server.
@@ -453,6 +474,9 @@ def serve(
         gpu_memory_utilization=gpu_memory,
         max_model_len=max_length,
         batch_size=batch_size,
+        backend=backend,  # NEW
+        vllm_server_url=vllm_server_url,  # NEW
+        max_concurrent=max_concurrent,  # NEW
     )
 
     # Create capability registry
