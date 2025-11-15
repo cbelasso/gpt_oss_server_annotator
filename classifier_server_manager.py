@@ -30,9 +30,9 @@ class ProcessorPool:
         gpu_memory_utilization: float = 0.95,
         max_model_len: int = 10240,
         batch_size: int = 25,
-        backend: str = "local",  # NEW
-        vllm_server_url: str = "http://0.0.0.0:8054/v1",  # NEW
-        max_concurrent: int = 5,  # NEW
+        backend: str = "local",
+        server_urls: List[str] = None,
+        max_concurrent: int = 5,
     ):
         from classifier import ClassificationProcessor
 
@@ -50,9 +50,9 @@ class ProcessorPool:
             gpu_memory_utilization=gpu_memory_utilization,
             max_model_len=max_model_len,
             batch_size=batch_size,
-            backend=backend,  # NEW
-            vllm_server_url=vllm_server_url,  # NEW
-            max_concurrent=max_concurrent,  # NEW
+            backend=backend,
+            server_urls=server_urls,
+            max_concurrent=max_concurrent,
         )
         console.print("[green]✓ Processor ready[/green]")
 

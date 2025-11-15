@@ -35,9 +35,8 @@ class ClassificationProcessor:
         max_model_len: int = 10240,
         multiplicity: int = 1,
         batch_size=25,
-        # NEW PARAMETERS
-        backend: str = "local",  # "local" or "vllm-server"
-        vllm_server_url: str = "http://0.0.0.0:8054/v1",
+        backend: str = "local",
+        server_urls: List[str] = None,
         max_concurrent: int = 5,
     ):
         self.batch_size = batch_size
@@ -61,10 +60,9 @@ class ClassificationProcessor:
             )
         elif backend == "vllm-server":
             self.llm_processor = VLLMServerProcessor(
-                server_url=vllm_server_url,
+                server_urls=server_urls,
                 model_name=llm,
                 max_concurrent=max_concurrent,
-                # Pass through args for compatibility (ignored by VLLMServerProcessor)
                 gpu_list=gpu_list,
                 gpu_memory_utilization=gpu_memory_utilization,
                 max_model_len=max_model_len,

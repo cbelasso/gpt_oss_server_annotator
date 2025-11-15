@@ -1,0 +1,25 @@
+base_port: 8054
+gpu_list:
+- 7
+- 5
+- 3
+model_name: openai/gpt-oss-120b
+servers:
+- gpu_pair:
+  - 7
+  - 6
+  instance_id: 0
+  port: 8054
+  url: http://localhost:8054/v1
+- gpu_pair:
+  - 5
+  - 4
+  instance_id: 1
+  port: 8055
+  url: http://localhost:8055/v1
+- gpu_pair:
+  - 3
+  - 2
+  instance_id: 2
+  port: 8056
+  url: http://localhost:8056/v1

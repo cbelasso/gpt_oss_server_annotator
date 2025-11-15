@@ -257,6 +257,32 @@ async def list_capabilities():
     return {"capabilities": state.registry.list_capabilities()}
 
 
+@app.get("/processor-metrics")
+async def get_processor_metrics():
+    """Get detailed processor metrics from the LLM processor."""
+    if not state.processor_pool:
+        raise HTTPException(status_code=503, detail="Server not initialized")
+
+    try:
+        processor = state.processor_pool.get_processor()
+
+        # Check if processor has metrics capability (only for vllm-server backend)
+        if hasattr(processor, "llm_processor") and hasattr(
+            processor.llm_processor, "get_metrics_summary"
+        ):
+            return processor.llm_processor.get_metrics_summary()
+        else:
+            # For local backend or when metrics not available
+            return {
+                "message": "Metrics not available",
+                "backend": getattr(processor, "backend", "unknown"),
+                "note": "Metrics only available for vllm-server backend",
+            }
+    except Exception as e:
+        console.print(f"[red]Error getting processor metrics: {e}[/red]")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/classify", response_model=ClassificationResponse)
 async def classify_texts(request: ClassificationRequest):
     """
@@ -457,6 +483,8 @@ def serve(
     console.print(f"  • Batch size: {batch_size}")
     console.print(f"  • Batch timeout: {batch_timeout}s")
 
+    server_urls = [url.strip() for url in vllm_server_url.split(",")]
+
     # Create policy
     policies = []
     if min_confidence:
@@ -474,9 +502,9 @@ def serve(
         gpu_memory_utilization=gpu_memory,
         max_model_len=max_length,
         batch_size=batch_size,
-        backend=backend,  # NEW
-        vllm_server_url=vllm_server_url,  # NEW
-        max_concurrent=max_concurrent,  # NEW
+        backend=backend,
+        server_urls=server_urls,  # ✅ Fixed (was server_uls)
+        max_concurrent=max_concurrent,
     )
 
     # Create capability registry
