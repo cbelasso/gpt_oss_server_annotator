@@ -99,19 +99,19 @@ class VLLMServerProcessor:
         # Connection pools (one per server)
         self._client_pools: Dict[str, List[AsyncOpenAI]] = {}
         self._pool_locks: Dict[str, asyncio.Lock] = {}
+        self._server_locks: Dict[str, asyncio.Semaphore] = {}
+        self._locks_event_loop_id: Optional[int] = None
+        self._initialization_lock = threading.Lock()
 
         # Load balancing
         self._round_robin_index = 0
-        self._server_locks: Dict[str, asyncio.Semaphore] = {}
-        self._locks_initialized = False
 
         # Metrics
         self.metrics: Dict[str, ServerMetrics] = {}
 
-        # Initialize for each server (but don't create locks yet!)
+        # Initialize for each server
         for url in self.server_urls:
             self._client_pools[url] = []
-            # Don't create locks/semaphores here - must be in event loop
             self.metrics[url] = ServerMetrics(url=url)
 
         # Storage for results (FlexibleSchemaProcessor compatibility)
@@ -123,16 +123,38 @@ class VLLMServerProcessor:
             logger.info(f"  • {url}")
 
     async def _ensure_locks_initialized(self):
-        """Lazy initialization of locks and semaphores in the correct event loop."""
-        if self._locks_initialized:
+        """
+        Lazy initialization of locks and semaphores in the correct event loop.
+        Reinitializes if we detect a different event loop.
+        """
+        try:
+            current_loop = asyncio.get_running_loop()
+            current_loop_id = id(current_loop)
+        except RuntimeError:
+            logger.error("Cannot initialize locks - no event loop running")
             return
 
-        for url in self.server_urls:
-            self._pool_locks[url] = asyncio.Lock()
-            self._server_locks[url] = asyncio.Semaphore(self.max_concurrent)
+        # Check if locks are already initialized for THIS event loop
+        if self._locks_event_loop_id == current_loop_id:
+            return
 
-        self._locks_initialized = True
-        logger.info("✓ Locks and semaphores initialized in event loop")
+        # Thread-safe initialization/reinitialization
+        with self._initialization_lock:
+            # Double-check after acquiring lock
+            if self._locks_event_loop_id == current_loop_id:
+                return
+
+            # Clear any existing locks from different event loop
+            self._pool_locks.clear()
+            self._server_locks.clear()
+
+            # Create new locks in current event loop
+            for url in self.server_urls:
+                self._pool_locks[url] = asyncio.Lock()
+                self._server_locks[url] = asyncio.Semaphore(self.max_concurrent)
+
+            self._locks_event_loop_id = current_loop_id
+            logger.debug(f"✓ Locks initialized in event loop {current_loop_id}")
 
     async def _get_client(self, server_url: str) -> AsyncOpenAI:
         """Get a client from the pool or create a new one."""
