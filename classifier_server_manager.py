@@ -341,7 +341,6 @@ class RequestBatcher:
 
         # Resolve execution order
         execution_order = self.registry.resolve_dependencies(list(all_caps))
-
         console.print(f"[cyan]Execution order: {' → '.join(execution_order)}[/cyan]")
 
         # Initialize results
@@ -395,6 +394,7 @@ class RequestBatcher:
 
                 # Execute capability
                 if cap_name == "classification":
+                    # Classification is sync, so wrap in asyncio.to_thread
                     cap_results = await asyncio.to_thread(
                         self._execute_classification, processor, texts_needing_cap
                     )
@@ -408,8 +408,9 @@ class RequestBatcher:
                             texts_needing_cap, cap_results, batch
                         )
                 else:
-                    cap_results = await asyncio.to_thread(
-                        self._execute_capability,
+                    # _execute_capability is now async, so just await it directly
+                    # (Don't wrap in asyncio.to_thread!)
+                    cap_results = await self._execute_capability(
                         processor,
                         capability,
                         texts_needing_cap,
@@ -426,35 +427,45 @@ class RequestBatcher:
 
         return all_results
 
+    async def _execute_capability(
+        self, processor, capability, texts: List[str], context: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Execute a single capability (async version).
+
+        This runs the sync processor method in a thread to avoid blocking.
+        """
+        try:
+            # Prepare prompts
+            prompts = capability.prepare_batch(texts, context)
+
+            # Execute with processor - wrap the sync call in asyncio.to_thread
+            prompt_results = await asyncio.to_thread(
+                processor.classify_with_custom_schema,
+                texts=prompts,
+                prompt_fn=lambda x: x,
+                schema=capability.schema,
+            )
+
+            # Post-process
+            processed_results = capability.post_process(prompt_results, context)
+
+            # Remap if needed
+            if len(prompts) == len(texts):
+                text_to_prompt = {text: prompt for text, prompt in zip(texts, prompts)}
+                return {
+                    text: processed_results.get(prompt)
+                    for text, prompt in text_to_prompt.items()
+                }
+            else:
+                return processed_results
+
+        except Exception as e:
+            console.print(f"[red]Capability {capability.name} failed: {e}[/red]")
+
     def _execute_classification(self, processor, texts: List[str]) -> Dict[str, Any]:
         """Execute classification capability."""
         return processor.classify_hierarchical(texts=texts)
-
-    def _execute_capability(
-        self, processor, capability, texts: List[str], context: Dict[str, Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """Execute a single capability."""
-        # Prepare prompts
-        prompts = capability.prepare_batch(texts, context)
-
-        # Execute with processor
-        prompt_results = processor.classify_with_custom_schema(
-            texts=prompts,
-            prompt_fn=lambda x: x,
-            schema=capability.schema,
-        )
-
-        # Post-process
-        processed_results = capability.post_process(prompt_results, context)
-
-        # Remap if needed
-        if len(prompts) == len(texts):
-            text_to_prompt = {text: prompt for text, prompt in zip(texts, prompts)}
-            return {
-                text: processed_results.get(prompt) for text, prompt in text_to_prompt.items()
-            }
-        else:
-            return processed_results
 
     def _build_classification_context(
         self, texts: List[str], classification_results: Dict[str, Any], batch: RequestBatch

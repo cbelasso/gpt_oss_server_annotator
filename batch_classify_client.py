@@ -294,6 +294,12 @@ def classify_batch(
     help="Enable global trend analysis",
 )
 @click.option(
+    "--max-stem-definitions",
+    type=int,
+    default=None,
+    help="Max definitions for stem analysis (NOTE: This is configured on the server side, not per-request)",
+)
+@click.option(
     "--recommendations-only",
     is_flag=True,
     help="Only detect recommendations (no classification)",
@@ -321,6 +327,7 @@ def main(
     enable_stem_polarity: bool,
     enable_stem_trends: bool,
     enable_trends: bool,
+    max_stem_definitions: Optional[int],
     recommendations_only: bool,
     alerts_only: bool,
 ):
@@ -333,6 +340,13 @@ def main(
     - Process multiple datasets concurrently against the same server
     - Avoid GPU memory management on the client side
     """
+    # Note about max_stem_definitions
+    if max_stem_definitions is not None:
+        console.print(
+            "[yellow]Note: --max-stem-definitions is configured on the server side. "
+            "This parameter has no effect in client mode.[/yellow]"
+        )
+
     # Validate output options
     if output_dir and chunk_size is None:
         console.print("[red]Error: --chunk-size required with --output-dir[/red]")
@@ -446,12 +460,14 @@ def main(
 
         if verbose > 0:
             console.print("\n[green]✓ Server is healthy[/green]")
-            if health_data.get("default_config"):
+            if config:
+                console.print(f"[cyan]Using config: {config}[/cyan]")
+            elif health_data.get("default_config"):
                 console.print(
-                    f"[cyan]Server default config: {health_data['default_config']}[/cyan]"
+                    f"[cyan]Using server's default config: {health_data['default_config']}[/cyan]"
                 )
             else:
-                console.print("[cyan]Server has no default config[/cyan]")
+                console.print("[cyan]No config specified (standalone capabilities only)[/cyan]")
     except Exception as e:
         console.print(f"[red]Error: Cannot connect to server at {server_url}[/red]")
         console.print(f"[red]{e}[/red]")
@@ -496,10 +512,10 @@ def main(
                 # Update progress
                 progress.update(task, advance=1)
 
-                # Show timing if verbose
-                if verbose >= 2:
+                # Show timing and config used (at verbose level 1 or higher)
+                if verbose >= 1:
                     proc_time = response_data.get("processing_time", 0)
-                    config_used = response_data.get("config_used", "default")
+                    config_used = response_data.get("config_used", "none")
                     console.print(
                         f"[dim]  Chunk {chunk_idx}: {len(chunk_texts)} texts, "
                         f"{proc_time:.2f}s, config: {config_used}[/dim]"

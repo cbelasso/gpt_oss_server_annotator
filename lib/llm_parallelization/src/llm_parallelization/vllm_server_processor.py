@@ -5,6 +5,7 @@ Enhanced VLLM Server Processor with all improvements:
 - Health checks
 - Automatic retry
 - Metrics collection
+- Fixed event loop handling
 """
 
 import asyncio
@@ -12,6 +13,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
+import threading
 import time
 from typing import Dict, List, Optional, Type
 
@@ -101,15 +103,15 @@ class VLLMServerProcessor:
         # Load balancing
         self._round_robin_index = 0
         self._server_locks: Dict[str, asyncio.Semaphore] = {}
+        self._locks_initialized = False
 
         # Metrics
         self.metrics: Dict[str, ServerMetrics] = {}
 
-        # Initialize for each server
+        # Initialize for each server (but don't create locks yet!)
         for url in self.server_urls:
             self._client_pools[url] = []
-            self._pool_locks[url] = asyncio.Lock()
-            self._server_locks[url] = asyncio.Semaphore(max_concurrent)
+            # Don't create locks/semaphores here - must be in event loop
             self.metrics[url] = ServerMetrics(url=url)
 
         # Storage for results (FlexibleSchemaProcessor compatibility)
@@ -120,8 +122,21 @@ class VLLMServerProcessor:
         for url in self.server_urls:
             logger.info(f"  • {url}")
 
+    async def _ensure_locks_initialized(self):
+        """Lazy initialization of locks and semaphores in the correct event loop."""
+        if self._locks_initialized:
+            return
+
+        for url in self.server_urls:
+            self._pool_locks[url] = asyncio.Lock()
+            self._server_locks[url] = asyncio.Semaphore(self.max_concurrent)
+
+        self._locks_initialized = True
+        logger.info("✓ Locks and semaphores initialized in event loop")
+
     async def _get_client(self, server_url: str) -> AsyncOpenAI:
         """Get a client from the pool or create a new one."""
+        await self._ensure_locks_initialized()
         async with self._pool_locks[server_url]:
             pool = self._client_pools[server_url]
 
@@ -133,6 +148,7 @@ class VLLMServerProcessor:
 
     async def _return_client(self, server_url: str, client: AsyncOpenAI):
         """Return a client to the pool."""
+        await self._ensure_locks_initialized()
         async with self._pool_locks[server_url]:
             pool = self._client_pools[server_url]
 
@@ -203,6 +219,7 @@ class VLLMServerProcessor:
 
             try:
                 # Acquire semaphore for this server
+                await self._ensure_locks_initialized()
                 async with self._server_locks[selected_server]:
                     # Get client from pool
                     client = await self._get_client(selected_server)
@@ -258,7 +275,7 @@ class VLLMServerProcessor:
     async def _single_inference(
         self, prompt: str, schema: Type[BaseModel], prompt_index: int, client: AsyncOpenAI
     ) -> dict:
-        """Execute a single inference request."""
+        """Execute a single inference request with enhanced error handling."""
         messages = [{"role": "user", "content": prompt}]
 
         try:
@@ -277,19 +294,40 @@ class VLLMServerProcessor:
                     "result": response.output_parsed,
                 }
             else:
+                # Log the actual response for debugging
+                logger.warning(
+                    f"Prompt {prompt_index}: Could not parse output. "
+                    f"Response type: {type(response)}"
+                )
+                if hasattr(response, "output"):
+                    logger.warning(f"Raw output: {str(response.output)[:500]}")
+
                 return {
                     "prompt_index": prompt_index,
                     "success": False,
-                    "error": "Could not parse output",
+                    "error": "Could not parse output - response not in expected format",
+                    "raw_response": str(response)[:1000],
                 }
 
         except Exception as e:
             import traceback
 
+            error_msg = str(e)
+
+            # Extract useful information from validation errors
+            if "validation error" in error_msg.lower():
+                logger.error(
+                    f"Prompt {prompt_index}: Pydantic validation failed. "
+                    f"Schema: {schema.__name__}"
+                )
+                logger.error(f"Validation error: {error_msg[:500]}")
+
             return {
                 "prompt_index": prompt_index,
                 "success": False,
-                "error": f"{str(e)}\n{traceback.format_exc()}",
+                "error": f"Inference failed: {error_msg}",
+                "error_type": type(e).__name__,
+                "traceback": traceback.format_exc(),
             }
 
     def process_with_schema(
@@ -299,9 +337,62 @@ class VLLMServerProcessor:
         batch_size: int = 25,
         formatted: bool = False,
     ) -> None:
-        """Process prompts with retry and load balancing."""
+        """
+        Process prompts with retry and load balancing.
+
+        Handles both scenarios:
+        - Called from sync context (batch_classify.py): Uses asyncio.run()
+        - Called from async context (FastAPI): Runs in a separate thread with new event loop
+        """
         self._schema = schema
-        self._results = asyncio.run(self._async_process_batch(prompts, schema))
+
+        try:
+            # Check if we're already in an event loop
+            loop = asyncio.get_running_loop()
+
+            # We're in an async context (e.g., FastAPI)
+            # Run the async code in a separate thread with its own event loop
+            logger.debug("Already in event loop, running async batch in thread")
+
+            result_container = [None]
+            exception_container = [None]
+
+            def run_in_thread():
+                """Run async code in a new thread with its own event loop."""
+                try:
+                    # Create a new event loop for this thread
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
+
+                    try:
+                        # Run the async batch processing
+                        result = new_loop.run_until_complete(
+                            self._async_process_batch(prompts, schema)
+                        )
+                        result_container[0] = result
+                    finally:
+                        new_loop.close()
+
+                except Exception as e:
+                    exception_container[0] = e
+
+            # Run in thread and wait for completion
+            thread = threading.Thread(target=run_in_thread)
+            thread.start()
+            thread.join(timeout=600)  # 10 minute timeout
+
+            if thread.is_alive():
+                raise TimeoutError("Batch processing timed out after 10 minutes")
+
+            if exception_container[0]:
+                raise exception_container[0]
+
+            self._results = result_container[0]
+
+        except RuntimeError:
+            # No event loop running - we can safely create one
+            logger.debug("No event loop detected, using asyncio.run()")
+            self._results = asyncio.run(self._async_process_batch(prompts, schema))
 
     async def _async_process_batch(
         self, prompts: List[str], schema: Type[BaseModel]
@@ -359,7 +450,13 @@ class VLLMServerProcessor:
 
     def terminate(self):
         """Cleanup all connections."""
-        asyncio.run(self._cleanup_pools())
+        try:
+            loop = asyncio.get_running_loop()
+            # Already in event loop, schedule cleanup as a task
+            asyncio.create_task(self._cleanup_pools())
+        except RuntimeError:
+            # No event loop, safe to create one
+            asyncio.run(self._cleanup_pools())
 
     async def _cleanup_pools(self):
         """Close all pooled clients."""
